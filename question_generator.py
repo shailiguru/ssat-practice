@@ -17,7 +17,16 @@ class QuestionGenerationError(Exception):
 
 class QuestionGenerator:
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        api_key = config.ANTHROPIC_API_KEY
+        # On Streamlit Cloud, the key may not be available at config import time.
+        # Read it directly from st.secrets as a fallback.
+        if not api_key:
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            except Exception:
+                pass
+        self.client = anthropic.Anthropic(api_key=api_key)
         self._last_request_time: float = 0
 
     def _rate_limit(self) -> None:
