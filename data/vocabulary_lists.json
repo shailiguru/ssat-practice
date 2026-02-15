@@ -1,0 +1,51 @@
+{
+    "elementary": {
+        "easy": [
+            "brave", "calm", "eager", "gentle", "swift", "bright", "tiny",
+            "huge", "afraid", "angry", "happy", "sad", "clever", "quiet",
+            "loud", "strong", "weak", "fast", "slow", "kind", "mean",
+            "beautiful", "ugly", "warm", "cold", "old", "young", "rich",
+            "poor", "clean", "dirty", "smooth", "rough", "hard", "soft"
+        ],
+        "medium": [
+            "abundant", "cautious", "diligent", "peculiar", "fragile",
+            "generous", "humble", "magnificent", "obedient", "patient",
+            "resist", "scarce", "triumph", "vanish", "ancient", "courage",
+            "damage", "enormous", "flexible", "harvest", "inspect", "journey",
+            "locate", "moisture", "observe", "preserve", "remote", "shelter",
+            "transport", "unique", "visible", "weary", "acquire", "capable"
+        ],
+        "hard": [
+            "benevolent", "conspicuous", "eloquent", "meticulous", "resilient",
+            "treacherous", "vigilant", "ambitious", "concealed", "deliberate",
+            "essential", "flourish", "gratitude", "hesitate", "illuminate",
+            "juvenile", "monotonous", "negotiate", "obstacle", "perceive",
+            "reluctant", "solitary", "tranquil", "verdict", "withdraw"
+        ]
+    },
+    "middle": {
+        "easy": [
+            "abundant", "benign", "candid", "deft", "elated", "feasible",
+            "genuine", "hostile", "immune", "jubilant", "keen", "lenient",
+            "mundane", "noble", "obscure", "plausible", "quaint", "rigid",
+            "serene", "tactful", "unique", "vivid", "wary", "zealous",
+            "ample", "blunt", "concise", "diverse", "eloquent", "fragile"
+        ],
+        "medium": [
+            "acrimonious", "bellicose", "copious", "ephemeral", "fastidious",
+            "gregarious", "indolent", "lethargic", "meticulous", "nonchalant",
+            "ostentatious", "pragmatic", "querulous", "reticent", "sanguine",
+            "tenacious", "ubiquitous", "vindictive", "ambiguous", "benevolent",
+            "clandestine", "diligent", "enigmatic", "frugal", "garrulous",
+            "haughty", "impeccable", "judicious", "lucid", "magnanimous"
+        ],
+        "hard": [
+            "abnegate", "calumny", "effulgent", "insouciant", "pernicious",
+            "recalcitrant", "sycophant", "truculent", "vituperative",
+            "obsequious", "perfunctory", "quixotic", "supercilious",
+            "trepidation", "usurp", "verisimilitude", "capricious",
+            "deleterious", "equivocate", "hackneyed", "iconoclast",
+            "jejune", "loquacious", "mendacious", "nascent", "parsimonious"
+        ]
+    }
+}
