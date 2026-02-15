@@ -104,7 +104,10 @@ class Database:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass  # WAL not supported on all filesystems
         self.conn.execute("PRAGMA foreign_keys=ON")
 
     def initialize(self) -> None:
