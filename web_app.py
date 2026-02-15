@@ -36,8 +36,15 @@ st.set_page_config(
 )
 
 # Initialize database once per session
+# On Streamlit Cloud the project dir is read-only, so use /tmp for the DB.
 if "db" not in st.session_state:
-    db = Database()
+    import os, tempfile
+    if os.path.isdir("/mount/src"):
+        # Running on Streamlit Cloud — use writable temp dir
+        db_path = os.path.join(tempfile.gettempdir(), "ssat_practice.db")
+    else:
+        db_path = config.DB_PATH
+    db = Database(db_path)
     db.initialize()
     st.session_state.db = db
 
