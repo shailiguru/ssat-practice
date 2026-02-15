@@ -176,6 +176,12 @@ class QuestionGenerator:
                 f"{'For elementary: stick to whole numbers, basic fractions, simple geometry.' if level == 'elementary' else ''}\n"
                 f"{'For middle level: include negative numbers, ratios, proportions, more complex operations.' if level == 'middle' else ''}\n"
                 f"Include the full solution steps in the explanation.\n"
+                f"\nCRITICAL: You MUST double-check every math question before returning it.\n"
+                f"1. Solve the problem yourself step by step.\n"
+                f"2. Verify your computed answer matches one of the 5 choices.\n"
+                f"3. Set correct_answer to the letter (A-E) of THAT matching choice.\n"
+                f"4. The explanation MUST show the work AND its final answer MUST match the choice labeled by correct_answer.\n"
+                f"If the answer does not appear among the choices, regenerate the question.\n"
             )
 
         base += (
@@ -346,6 +352,48 @@ class QuestionGenerator:
 
         return questions
 
+    @staticmethod
+    def _extract_numbers(text: str) -> List[str]:
+        """Extract numeric values (int/float/fraction) from text."""
+        import re
+        # Match integers, decimals, and simple fractions
+        return re.findall(r'-?\d+(?:\.\d+)?(?:/\d+)?', text)
+
+    def _try_fix_correct_answer(
+        self,
+        choices: Dict[str, str],
+        correct: str,
+        explanation: str,
+        question_type: str,
+    ) -> str:
+        """For math questions, check if the explanation's final answer matches the
+        tagged correct choice. If not, try to find the right letter."""
+        if question_type not in ("arithmetic", "algebra", "geometry", "word_problem"):
+            return correct
+
+        if not explanation:
+            return correct
+
+        # Get numbers from explanation (last number is usually the answer)
+        expl_numbers = self._extract_numbers(explanation)
+        if not expl_numbers:
+            return correct
+
+        final_answer = expl_numbers[-1]
+
+        # Check if the tagged correct choice contains the final answer
+        correct_text = choices.get(correct, "")
+        if final_answer in correct_text:
+            return correct  # Already consistent
+
+        # The tagged answer doesn't match — search for the right choice
+        for letter in ("A", "B", "C", "D", "E"):
+            if letter in choices and final_answer in choices[letter]:
+                return letter  # Found the matching choice
+
+        # Could not resolve — keep original (better than discarding)
+        return correct
+
     def _validate_and_create_question(
         self,
         qd: Dict,
@@ -377,6 +425,9 @@ class QuestionGenerator:
         for letter in "ABCDE":
             if letter not in choices:
                 choices[letter] = ""
+
+        # For math questions, verify the correct_answer matches the explanation
+        correct = self._try_fix_correct_answer(choices, correct, explanation, question_type)
 
         return Question(
             level=level,
