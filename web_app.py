@@ -37,33 +37,16 @@ st.set_page_config(
 
 # Initialize database once per session
 # On Streamlit Cloud the project dir is read-only, so use /tmp for the DB.
-import os, tempfile, sqlite3
+import os, tempfile
 
-def _init_db():
-    """Create and initialize the database, handling Streamlit Cloud constraints."""
+if "db" not in st.session_state:
     if os.path.isdir("/mount/src"):
         db_path = os.path.join(tempfile.gettempdir(), "ssat_practice.db")
     else:
         db_path = config.DB_PATH
-
-    # Connect directly first to create tables, avoiding WAL issues on Cloud
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys=ON")
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-    except Exception:
-        pass  # WAL not supported on all filesystems
-    from database import SCHEMA
-    conn.executescript(SCHEMA)
-    conn.commit()
-    conn.close()
-
-    # Now create the Database object pointing to the same path
     db = Database(db_path)
-    return db
-
-if "db" not in st.session_state:
-    st.session_state.db = _init_db()
+    db.initialize()
+    st.session_state.db = db
 
 if "page" not in st.session_state:
     st.session_state.page = "home"
