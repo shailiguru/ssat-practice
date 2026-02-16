@@ -218,7 +218,21 @@ class QuestionGenerator:
         grade: int,
         topics: Optional[List[str]] = None,
     ) -> str:
+        # Add a random seed phrase to encourage variety across batches
+        import random
+        variety_seeds = [
+            "Use creative, original scenarios.",
+            "Use diverse real-world contexts and themes.",
+            "Vary the subject matter widely — nature, sports, cooking, travel, science, history.",
+            "Make each question unique with different contexts and numbers.",
+            "Use a wide range of topics and settings.",
+            "Include varied scenarios — school, animals, weather, space, food, music.",
+        ]
+        seed = random.choice(variety_seeds)
+
         prompt = f"Generate exactly {count} {question_type} questions at difficulty {difficulty}/5 for grade {grade}."
+        prompt += f"\n{seed}"
+        prompt += "\nEach question must be substantially different from the others — vary the context, numbers, and wording."
         if topics:
             prompt += f"\nFocus on these specific topics: {', '.join(topics)}"
         prompt += "\nReturn ONLY the JSON object, no markdown formatting or code blocks."

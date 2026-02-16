@@ -211,8 +211,20 @@ class QuestionCache:
         return stats
 
     def _deduplicate(self, questions: List[Question]) -> List[Question]:
-        """Remove questions with duplicate stems (normalized)."""
-        seen_stems = set()
+        """Remove questions with duplicate stems (normalized), both within
+        the batch and against questions already in the database."""
+        # Load existing stems from DB to avoid regenerating the same questions
+        existing_stems = set()
+        try:
+            rows = self.db.conn.execute(
+                "SELECT stem FROM questions"
+            ).fetchall()
+            for r in rows:
+                existing_stems.add(r["stem"].strip().lower())
+        except Exception:
+            pass
+
+        seen_stems = set(existing_stems)
         unique = []
         for q in questions:
             normalized = q.stem.strip().lower()
