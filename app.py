@@ -254,7 +254,11 @@ def main() -> None:
         display.press_enter_to_continue()
 
     # Initialize database
-    db = Database()
+    db_url = config.SUPABASE_DB_URL
+    if not db_url:
+        display.show_error("SUPABASE_DB_URL not configured. Set it in .env or environment.")
+        sys.exit(1)
+    db = Database(db_url)
     db.initialize()
 
     try:

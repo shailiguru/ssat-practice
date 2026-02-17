@@ -35,16 +35,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Initialize database once per session
-# On Streamlit Cloud the project dir is read-only, so use /tmp for the DB.
-import os, tempfile
-
+# Initialize database once per session (Supabase PostgreSQL)
 if "db" not in st.session_state:
-    if os.path.isdir("/mount/src"):
-        db_path = os.path.join(tempfile.gettempdir(), "ssat_practice.db")
-    else:
-        db_path = config.DB_PATH
-    db = Database(db_path)
+    db_url = config.SUPABASE_DB_URL
+    if not db_url:
+        # Fallback: try st.secrets directly
+        try:
+            db_url = st.secrets.get("SUPABASE_DB_URL", "")
+        except Exception:
+            pass
+    if not db_url:
+        st.error("Database not configured. Please set SUPABASE_DB_URL in your secrets.")
+        st.stop()
+    db = Database(db_url)
     db.initialize()
     st.session_state.db = db
 
@@ -1333,11 +1336,7 @@ def page_settings():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Yes, Delete Everything", type="primary"):
-                db.conn.execute("DELETE FROM answers WHERE student_id = ?", (student.id,))
-                db.conn.execute("DELETE FROM test_sessions WHERE student_id = ?", (student.id,))
-                db.conn.execute("DELETE FROM topic_mastery WHERE student_id = ?", (student.id,))
-                db.conn.execute("DELETE FROM writing_samples WHERE student_id = ?", (student.id,))
-                db.conn.commit()
+                db.reset_student_progress(student.id)
                 st.session_state.confirm_reset = False
                 st.success("Progress has been reset.")
                 st.rerun()

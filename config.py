@@ -27,6 +27,7 @@ def _get_secret(key: str, default: str = "") -> str:
 # Environment-driven settings
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY: str = _get_secret("ANTHROPIC_API_KEY", "")
+SUPABASE_DB_URL: str = _get_secret("SUPABASE_DB_URL", "")
 DB_PATH: str = _get_secret("SSAT_DB_PATH", str(Path(__file__).parent / "ssat_practice.db"))
 MODEL: str = _get_secret("SSAT_MODEL", "claude-sonnet-4-5-20250929")
 TIMER_ENABLED: bool = _get_secret("SSAT_TIMER_ENABLED", "true").lower() == "true"

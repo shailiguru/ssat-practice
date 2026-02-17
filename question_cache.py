@@ -216,11 +216,9 @@ class QuestionCache:
         # Load existing stems from DB to avoid regenerating the same questions
         existing_stems = set()
         try:
-            rows = self.db.conn.execute(
-                "SELECT stem FROM questions"
-            ).fetchall()
-            for r in rows:
-                existing_stems.add(r["stem"].strip().lower())
+            stems = self.db.get_all_stems()
+            for s in stems:
+                existing_stems.add(s.strip().lower())
         except Exception:
             pass
 
