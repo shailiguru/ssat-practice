@@ -91,32 +91,11 @@ SCHEMA_STATEMENTS = [
 class Database:
     def __init__(self, db_url: str):
         self.db_url = db_url
-        # Parse the URL manually to handle dots in username
-        # (Supabase pooler uses "postgres.PROJECT_REF" as username)
-        from urllib.parse import urlparse, unquote
-        parsed = urlparse(db_url)
-        username = unquote(parsed.username) if parsed.username else "postgres"
-        password = unquote(parsed.password) if parsed.password else ""
-        host = parsed.hostname
-        port = parsed.port or 5432
-        dbname = parsed.path.lstrip("/") or "postgres"
-
-        # For Supabase pooler: extract project ref from dotted username
-        # and pass it via options so PgBouncer routes correctly
-        connect_kwargs = dict(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=username,
-            password=password,
-            sslmode="require",
-        )
-        if "." in username:
-            # e.g. "postgres.dtemthebbuhdifiluoqo" -> project ref "dtemthebbuhdifiluoqo"
-            project_ref = username.split(".", 1)[1]
-            connect_kwargs["options"] = f"-c search_path=public --cluster=postgres/{project_ref}"
-
-        self.conn = psycopg2.connect(**connect_kwargs)
+        # Append sslmode=require if not already present
+        if "sslmode" not in db_url:
+            separator = "&" if "?" in db_url else "?"
+            db_url = f"{db_url}{separator}sslmode=require"
+        self.conn = psycopg2.connect(db_url)
         self.conn.autocommit = False
 
     def initialize(self) -> None:
