@@ -599,3 +599,93 @@ class Database:
             "drills": drills,
             "total_answers": total_answers,
         }
+
+    def get_daily_activity(self, student_id: int, days: int = 30) -> List[Dict]:
+        """Get per-day activity: questions answered, correct, accuracy, time spent."""
+        rows = self.conn.execute(
+            """SELECT DATE(a.answered_at) as day,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN a.is_correct = 1 THEN 1 ELSE 0 END) as correct,
+                      SUM(CASE WHEN a.selected_answer IS NULL THEN 1 ELSE 0 END) as skipped,
+                      SUM(a.time_spent_seconds) as total_time
+               FROM answers a
+               WHERE a.student_id = ?
+                 AND a.answered_at >= DATE('now', ?)
+               GROUP BY DATE(a.answered_at)
+               ORDER BY day""",
+            (student_id, f"-{days} days"),
+        ).fetchall()
+        return [
+            {
+                "day": r["day"],
+                "total": r["total"],
+                "correct": r["correct"],
+                "skipped": r["skipped"],
+                "wrong": r["total"] - r["correct"] - r["skipped"],
+                "total_time": r["total_time"] or 0,
+            }
+            for r in rows
+        ]
+
+    def get_daily_activity_by_topic(self, student_id: int, days: int = 30) -> List[Dict]:
+        """Get per-day, per-topic breakdown."""
+        rows = self.conn.execute(
+            """SELECT DATE(a.answered_at) as day,
+                      q.question_type as topic,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN a.is_correct = 1 THEN 1 ELSE 0 END) as correct
+               FROM answers a
+               JOIN questions q ON a.question_id = q.id
+               WHERE a.student_id = ?
+                 AND a.answered_at >= DATE('now', ?)
+               GROUP BY DATE(a.answered_at), q.question_type
+               ORDER BY day, topic""",
+            (student_id, f"-{days} days"),
+        ).fetchall()
+        return [
+            {"day": r["day"], "topic": r["topic"], "total": r["total"], "correct": r["correct"]}
+            for r in rows
+        ]
+
+    def get_streak_data(self, student_id: int) -> Dict:
+        """Calculate current streak (consecutive days with activity) and longest streak."""
+        rows = self.conn.execute(
+            """SELECT DISTINCT DATE(answered_at) as day
+               FROM answers
+               WHERE student_id = ?
+               ORDER BY day DESC""",
+            (student_id,),
+        ).fetchall()
+        if not rows:
+            return {"current_streak": 0, "longest_streak": 0, "total_days": 0}
+
+        from datetime import date, timedelta
+        days_active = [date.fromisoformat(r["day"]) for r in rows]
+        total_days = len(days_active)
+
+        # Current streak (from today backwards)
+        today = date.today()
+        current_streak = 0
+        check = today
+        for d in days_active:
+            if d == check or d == check - timedelta(days=1):
+                current_streak += 1
+                check = d - timedelta(days=1)
+            else:
+                break
+
+        # Longest streak
+        longest = 1
+        current = 1
+        for i in range(1, len(days_active)):
+            if days_active[i - 1] - days_active[i] == timedelta(days=1):
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 1
+
+        return {
+            "current_streak": current_streak,
+            "longest_streak": max(longest, current_streak),
+            "total_days": total_days,
+        }

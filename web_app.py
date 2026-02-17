@@ -1008,6 +1008,8 @@ def page_writing():
 # =====================================================================
 
 def page_progress():
+    import pandas as pd
+
     student = st.session_state.student
     db = get_db()
 
@@ -1015,48 +1017,237 @@ def page_progress():
     st.caption(f"Grade {student.grade} | {student.level.title()} Level")
 
     stats = db.get_student_stats(student.id)
-    sessions = db.get_sessions_for_student(student.id, limit=20)
+    sessions = db.get_sessions_for_student(student.id, limit=50)
     mastery = db.get_topic_mastery(student.id)
+    streak = db.get_streak_data(student.id)
 
-    # Stats cards
-    cols = st.columns(4)
-    cols[0].metric("Full Tests", stats["full_tests"])
-    cols[1].metric("Section Practices", stats["section_practices"])
-    cols[2].metric("Drills", stats["drills"])
+    # ── Overview Cards ──
+    cols = st.columns(5)
+    cols[0].metric("Current Streak", f"{streak['current_streak']} day{'s' if streak['current_streak'] != 1 else ''}")
+    cols[1].metric("Longest Streak", f"{streak['longest_streak']} days")
+    cols[2].metric("Days Practiced", streak["total_days"])
     cols[3].metric("Total Questions", f"{stats['total_answers']:,}")
+    cols[4].metric("Sessions", stats["full_tests"] + stats["section_practices"] + stats["drills"])
 
-    # Score trend
-    full_tests = [s for s in sessions if s.mode == "full_test" and s.total_scaled]
-    if full_tests:
-        st.subheader("Score Trend")
-        import pandas as pd
-        df = pd.DataFrame([
-            {"Date": s.started_at[:10] if s.started_at else "?", "Score": s.total_scaled}
-            for s in reversed(full_tests)
-        ])
-        st.line_chart(df.set_index("Date"))
+    # ── Tabs for different views ──
+    tab_daily, tab_topics, tab_scores, tab_strengths, tab_recs = st.tabs(
+        ["Daily Activity", "Topic Progress", "Score Trend", "Strengths & Weaknesses", "Recommendations"]
+    )
 
-    # Topic mastery
-    active_mastery = [m for m in mastery if m.total_attempted > 0]
-    if active_mastery:
-        st.subheader("Topic Mastery")
-        import pandas as pd
-        rows = []
-        for m in active_mastery:
-            acc = m.total_correct / m.total_attempted
-            name = QUESTION_TYPE_DISPLAY.get(m.topic_tag, m.topic_tag.title())
-            status = "Strong" if acc >= 0.85 else ("Needs Work" if acc >= 0.60 else "Weak")
-            rows.append({"Topic": name, "Accuracy": f"{acc:.0%}", "Attempted": m.total_attempted,
-                         "Difficulty": f"{m.difficulty_level:.1f}", "Status": status})
-        st.table(pd.DataFrame(rows))
+    # ── Tab 1: Daily Activity ──
+    with tab_daily:
+        days_range = st.selectbox("Show last", [7, 14, 30], index=1, format_func=lambda x: f"{x} days")
+        daily = db.get_daily_activity(student.id, days=days_range)
 
-    # Recommendations
-    tracker = ProgressTracker(db, student)
-    recs = tracker.get_recommendations(stats, sessions, mastery)
-    if recs:
-        st.subheader("Recommendations")
-        for r in recs:
-            st.write(f"- {r}")
+        if not daily:
+            st.info("No activity yet. Start a drill or test to see daily progress here!")
+        else:
+            # Fill in missing days with zeros
+            from datetime import date, timedelta
+            all_days = {}
+            start = date.today() - timedelta(days=days_range - 1)
+            for i in range(days_range):
+                d = (start + timedelta(days=i)).isoformat()
+                all_days[d] = {"day": d, "total": 0, "correct": 0, "wrong": 0, "skipped": 0, "total_time": 0}
+            for entry in daily:
+                if entry["day"] in all_days:
+                    all_days[entry["day"]] = entry
+
+            daily_filled = list(all_days.values())
+
+            # Questions per day chart
+            st.subheader("Questions Completed Per Day")
+            df_daily = pd.DataFrame(daily_filled)
+            df_daily["day"] = pd.to_datetime(df_daily["day"])
+            chart_df = df_daily.set_index("day")[["correct", "wrong", "skipped"]]
+            chart_df.columns = ["Correct", "Wrong", "Skipped"]
+            st.bar_chart(chart_df, color=["#2ecc71", "#e74c3c", "#95a5a6"])
+
+            # Daily accuracy trend
+            st.subheader("Daily Accuracy")
+            df_daily["accuracy"] = df_daily.apply(
+                lambda r: round(r["correct"] / r["total"] * 100) if r["total"] > 0 else None, axis=1
+            )
+            acc_df = df_daily[df_daily["accuracy"].notna()].set_index("day")[["accuracy"]]
+            acc_df.columns = ["Accuracy %"]
+            if not acc_df.empty:
+                st.line_chart(acc_df)
+
+            # Time spent per day
+            st.subheader("Time Spent Per Day")
+            df_daily["minutes"] = (df_daily["total_time"] / 60).round(1)
+            time_df = df_daily.set_index("day")[["minutes"]]
+            time_df.columns = ["Minutes"]
+            st.bar_chart(time_df)
+
+            # Daily detail table
+            st.subheader("Daily Log")
+            table_rows = []
+            for entry in reversed(daily_filled):
+                if entry["total"] == 0:
+                    continue
+                acc = round(entry["correct"] / entry["total"] * 100) if entry["total"] > 0 else 0
+                mins = round(entry["total_time"] / 60, 1) if entry["total_time"] else 0
+                table_rows.append({
+                    "Date": entry["day"],
+                    "Questions": entry["total"],
+                    "Correct": entry["correct"],
+                    "Wrong": entry["wrong"],
+                    "Skipped": entry["skipped"],
+                    "Accuracy": f"{acc}%",
+                    "Time": f"{mins} min",
+                })
+            if table_rows:
+                st.table(pd.DataFrame(table_rows))
+
+    # ── Tab 2: Topic Progress ──
+    with tab_topics:
+        daily_by_topic = db.get_daily_activity_by_topic(student.id, days=30)
+
+        if not daily_by_topic:
+            st.info("No topic data yet. Complete some practice to see per-topic trends!")
+        else:
+            # Aggregate by topic
+            topic_agg = {}
+            for entry in daily_by_topic:
+                topic = entry["topic"]
+                if topic not in topic_agg:
+                    topic_agg[topic] = {"total": 0, "correct": 0, "days": set()}
+                topic_agg[topic]["total"] += entry["total"]
+                topic_agg[topic]["correct"] += entry["correct"]
+                topic_agg[topic]["days"].add(entry["day"])
+
+            st.subheader("Questions by Topic (Last 30 Days)")
+            topic_rows = []
+            for topic, data in sorted(topic_agg.items(), key=lambda x: -x[1]["total"]):
+                acc = round(data["correct"] / data["total"] * 100) if data["total"] > 0 else 0
+                name = QUESTION_TYPE_DISPLAY.get(topic, topic.title())
+                topic_rows.append({
+                    "Topic": name,
+                    "Total Questions": data["total"],
+                    "Correct": data["correct"],
+                    "Accuracy": f"{acc}%",
+                    "Days Practiced": len(data["days"]),
+                })
+            st.table(pd.DataFrame(topic_rows))
+
+            # Topic accuracy over time (pivot chart)
+            st.subheader("Topic Accuracy Over Time")
+            topic_daily = {}
+            for entry in daily_by_topic:
+                day = entry["day"]
+                topic = QUESTION_TYPE_DISPLAY.get(entry["topic"], entry["topic"].title())
+                if day not in topic_daily:
+                    topic_daily[day] = {}
+                if entry["total"] > 0:
+                    topic_daily[day][topic] = round(entry["correct"] / entry["total"] * 100)
+
+            if topic_daily:
+                pivot_df = pd.DataFrame.from_dict(topic_daily, orient="index").sort_index()
+                pivot_df.index = pd.to_datetime(pivot_df.index)
+                st.line_chart(pivot_df)
+
+    # ── Tab 3: Score Trend ──
+    with tab_scores:
+        full_tests = [s for s in sessions if s.mode == "full_test" and s.total_scaled]
+        if not full_tests:
+            st.info("No full practice tests completed yet. Take a full test to see score trends!")
+        else:
+            st.subheader("Total Scaled Score Trend")
+            df_scores = pd.DataFrame([
+                {"Date": s.started_at[:10] if s.started_at else "?", "Total Score": s.total_scaled}
+                for s in reversed(full_tests)
+            ])
+            df_scores["Date"] = pd.to_datetime(df_scores["Date"])
+            st.line_chart(df_scores.set_index("Date"))
+
+            # Per-section scores
+            st.subheader("Section Scores Over Time")
+            section_rows = []
+            for s in reversed(full_tests):
+                row = {"Date": s.started_at[:10] if s.started_at else "?"}
+                if s.verbal_scaled:
+                    row["Verbal"] = s.verbal_scaled
+                if s.quantitative_scaled:
+                    row["Quantitative"] = s.quantitative_scaled
+                if s.reading_scaled:
+                    row["Reading"] = s.reading_scaled
+                section_rows.append(row)
+            if section_rows:
+                df_sections = pd.DataFrame(section_rows)
+                df_sections["Date"] = pd.to_datetime(df_sections["Date"])
+                st.line_chart(df_sections.set_index("Date"))
+
+            # Score table
+            st.subheader("Test History")
+            history_rows = []
+            for s in full_tests:
+                history_rows.append({
+                    "Date": s.started_at[:10] if s.started_at else "?",
+                    "Verbal": s.verbal_scaled or "—",
+                    "Quant": s.quantitative_scaled or "—",
+                    "Reading": s.reading_scaled or "—",
+                    "Total": s.total_scaled or "—",
+                })
+            st.table(pd.DataFrame(history_rows))
+
+    # ── Tab 4: Strengths & Weaknesses ──
+    with tab_strengths:
+        active_mastery = [m for m in mastery if m.total_attempted > 0]
+        if not active_mastery:
+            st.info("Not enough data yet. Keep practicing to see strengths and weaknesses!")
+        else:
+            # Sort by accuracy
+            sorted_mastery = sorted(
+                active_mastery,
+                key=lambda m: m.total_correct / m.total_attempted if m.total_attempted > 0 else 0,
+                reverse=True,
+            )
+
+            st.subheader("All Topics")
+            for m in sorted_mastery:
+                acc = m.total_correct / m.total_attempted
+                name = QUESTION_TYPE_DISPLAY.get(m.topic_tag, m.topic_tag.title())
+                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                with col1:
+                    st.progress(acc, text=f"**{name}** — {acc:.0%}")
+                with col2:
+                    st.caption(f"{m.total_attempted} Qs")
+                with col3:
+                    st.caption(f"Diff: {m.difficulty_level:.1f}/5")
+                with col4:
+                    if acc >= 0.85:
+                        st.success("Strong")
+                    elif acc >= 0.60:
+                        st.warning("Okay")
+                    else:
+                        st.error("Needs Work")
+
+            # Top strengths and weaknesses callouts
+            if len(sorted_mastery) >= 2:
+                best = sorted_mastery[0]
+                worst = sorted_mastery[-1]
+                best_name = QUESTION_TYPE_DISPLAY.get(best.topic_tag, best.topic_tag.title())
+                worst_name = QUESTION_TYPE_DISPLAY.get(worst.topic_tag, worst.topic_tag.title())
+                best_acc = best.total_correct / best.total_attempted
+                worst_acc = worst.total_correct / worst.total_attempted
+
+                st.divider()
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.success(f"**Strongest:** {best_name} ({best_acc:.0%})")
+                with c2:
+                    st.error(f"**Needs Most Work:** {worst_name} ({worst_acc:.0%})")
+
+    # ── Tab 5: Recommendations ──
+    with tab_recs:
+        tracker = ProgressTracker(db, student)
+        recs = tracker.get_recommendations(stats, sessions, mastery)
+        if recs:
+            for r in recs:
+                st.write(f"- {r}")
+        else:
+            st.success("Keep practicing! Recommendations will appear as more data is collected.")
 
 
 # =====================================================================
