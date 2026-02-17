@@ -450,6 +450,28 @@ def page_home():
         st.markdown("**Full Simulation**")
         st.write("Take a **Full Practice Test** to simulate the real SSAT.")
 
+    # ── Study Coach Agent ──
+    st.divider()
+    st.subheader("What Should I Study Today?")
+    st.caption("Your AI study coach analyzes your practice data and creates a personalized plan.")
+
+    col_coach, col_spacer = st.columns([1, 2])
+    with col_coach:
+        if st.button("Get My Study Plan", type="primary", key="study_coach_btn"):
+            from agents import run_study_coach
+            with st.spinner("Your coach is analyzing your practice data..."):
+                try:
+                    recommendation = run_study_coach(get_db(), s)
+                    st.session_state.study_coach_result = recommendation
+                except Exception as e:
+                    st.error(f"Study coach encountered an error: {e}")
+
+    if "study_coach_result" in st.session_state:
+        st.markdown(st.session_state.study_coach_result)
+        if st.button("Refresh Recommendation", key="study_coach_refresh"):
+            del st.session_state.study_coach_result
+            st.rerun()
+
     # Streaks & Badges
     db = get_db()
     streak_data = db.get_streak_data(s.id)
