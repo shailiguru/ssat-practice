@@ -91,7 +91,18 @@ SCHEMA_STATEMENTS = [
 class Database:
     def __init__(self, db_url: str):
         self.db_url = db_url
-        self.conn = psycopg2.connect(db_url)
+        # Parse the URL manually to handle dots in username
+        # (Supabase pooler uses "postgres.PROJECT_REF" as username,
+        #  and psycopg2's URL parser mishandles the dot)
+        from urllib.parse import urlparse, unquote
+        parsed = urlparse(db_url)
+        self.conn = psycopg2.connect(
+            host=parsed.hostname,
+            port=parsed.port or 5432,
+            dbname=parsed.path.lstrip("/") or "postgres",
+            user=unquote(parsed.username) if parsed.username else "postgres",
+            password=unquote(parsed.password) if parsed.password else "",
+        )
         self.conn.autocommit = False
 
     def initialize(self) -> None:

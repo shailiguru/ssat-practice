@@ -49,9 +49,9 @@ if "db" not in st.session_state:
         st.stop()
     # Show masked URL for debugging connection issues
     try:
-        parts = db_url.split("@")
-        if len(parts) == 2:
-            st.caption(f"Connecting to: ...@{parts[1]}")
+        from urllib.parse import urlparse
+        _parsed = urlparse(db_url)
+        st.caption(f"Connecting as: {_parsed.username} @ {_parsed.hostname}:{_parsed.port}")
     except Exception:
         pass
     try:
