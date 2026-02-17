@@ -39,7 +39,6 @@ st.set_page_config(
 if "db" not in st.session_state:
     db_url = config.SUPABASE_DB_URL
     if not db_url:
-        # Fallback: try st.secrets directly
         try:
             db_url = st.secrets.get("SUPABASE_DB_URL", "")
         except Exception:
@@ -47,13 +46,6 @@ if "db" not in st.session_state:
     if not db_url:
         st.error("Database not configured. Please set SUPABASE_DB_URL in your secrets.")
         st.stop()
-    # Show masked URL for debugging connection issues
-    try:
-        from urllib.parse import urlparse
-        _parsed = urlparse(db_url)
-        st.caption(f"Connecting as: {_parsed.username} @ {_parsed.hostname}:{_parsed.port}")
-    except Exception:
-        pass
     try:
         db = Database(db_url)
         db.initialize()
