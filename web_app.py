@@ -47,9 +47,20 @@ if "db" not in st.session_state:
     if not db_url:
         st.error("Database not configured. Please set SUPABASE_DB_URL in your secrets.")
         st.stop()
-    db = Database(db_url)
-    db.initialize()
-    st.session_state.db = db
+    # Show masked URL for debugging connection issues
+    try:
+        parts = db_url.split("@")
+        if len(parts) == 2:
+            st.caption(f"Connecting to: ...@{parts[1]}")
+    except Exception:
+        pass
+    try:
+        db = Database(db_url)
+        db.initialize()
+        st.session_state.db = db
+    except Exception as e:
+        st.error(f"Database connection failed: {e}")
+        st.stop()
 
 if "page" not in st.session_state:
     st.session_state.page = "home"
