@@ -261,6 +261,10 @@ def render_sidebar():
                 reset_test_state()
                 st.session_state.page = "quick_drill"
                 st.rerun()
+            if st.button("5-Min Mini Test", use_container_width=True, key="nav_mini"):
+                reset_test_state()
+                st.session_state.page = "mini_test"
+                st.rerun()
             if st.button("Review Missed", use_container_width=True, key="nav_review"):
                 st.session_state.page = "review"
                 st.rerun()
@@ -337,14 +341,17 @@ def page_home():
                 f"Sections: {', '.join(sec.name for sec in level_config.sections)} | "
                 f"Score range: {level_config.score_min}-{level_config.score_max} per section")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown("**Quick Start**")
         st.write("Try a **Quick Drill** to warm up on a specific topic.")
     with col2:
+        st.markdown("**5-Min Challenge**")
+        st.write("Take a **Mini Test** — 10 mixed questions, 5-minute timer.")
+    with col3:
         st.markdown("**Build Endurance**")
         st.write("Use **Section Practice** to practice full timed sections.")
-    with col3:
+    with col4:
         st.markdown("**Full Simulation**")
         st.write("Take a **Full Practice Test** to simulate the real SSAT.")
 
@@ -537,6 +544,196 @@ def _drill_complete():
 
     for event in events:
         st.success(event)
+
+    if st.button("Back to Home", type="primary"):
+        reset_test_state()
+        st.session_state.page = "home"
+        st.rerun()
+
+
+# =====================================================================
+# Section 7b: 5-Minute Mini Test
+# =====================================================================
+
+def page_mini_test():
+    phase = st.session_state.get("test_phase", "setup")
+
+    if phase == "setup":
+        _mini_setup()
+    elif phase == "question":
+        _mini_question()
+    elif phase == "complete":
+        _mini_complete()
+
+
+MINI_TEST_QUESTIONS = 10
+MINI_TEST_SECONDS = 300  # 5 minutes
+
+
+def _mini_setup():
+    student = st.session_state.student
+    st.header("5-Minute Mini Test")
+    st.markdown(
+        "**10 mixed questions** across all topics for your level.  \n"
+        "**5-minute timer** — no peeking at answers until the end!"
+    )
+
+    level_types = LEVEL_TYPES.get(student.level, ["synonym"])
+    st.caption(f"Topics: {', '.join(QUESTION_TYPE_DISPLAY.get(t, t) for t in level_types)}")
+
+    if st.button("Start Mini Test", type="primary"):
+        cache = get_cache()
+        engine = get_leveling()
+        difficulty_map = engine.get_difficulty_map()
+
+        questions: List[Question] = []
+        per_type = max(1, MINI_TEST_QUESTIONS // len(level_types))
+        remainder = MINI_TEST_QUESTIONS - per_type * len(level_types)
+
+        with st.spinner("Loading questions..."):
+            for i, qtype in enumerate(level_types):
+                n = per_type + (1 if i < remainder else 0)
+                diff = difficulty_map.get(qtype, 3)
+                qs = cache.get_questions(student.id, qtype, student.level, int(diff), n, student.grade)
+                questions.extend(qs)
+
+        if not questions:
+            st.error("No questions available. Go to Settings > Pre-generate questions first.")
+            return
+
+        random.shuffle(questions)
+        questions = questions[:MINI_TEST_QUESTIONS]
+
+        session = TestSession(
+            student_id=student.id, level=student.level, grade=student.grade,
+            mode="mini_test", started_at=datetime.now().isoformat(),
+        )
+        session = get_db().create_session(session)
+
+        from config import SectionConfig
+        st.session_state.test_session = session
+        st.session_state.test_questions = questions
+        st.session_state.test_answers = []
+        st.session_state.test_index = 0
+        st.session_state.test_instant_feedback = False
+        st.session_state.test_drill_start = time.time()
+        st.session_state.test_section_start_time = time.time()
+        st.session_state.test_section_time_limit = MINI_TEST_SECONDS
+        st.session_state.test_sections = [SectionConfig("Mini Test", MINI_TEST_QUESTIONS, 5, tuple(level_types))]
+        st.session_state.test_section_idx = 0
+        st.session_state.test_phase = "question"
+        st.session_state.test_q_start_time = time.time()
+        st.rerun()
+
+
+def _mini_question():
+    questions = st.session_state.test_questions
+    idx = st.session_state.test_index
+
+    if is_time_up():
+        st.warning("Time's up!")
+        skip_remaining_questions()
+        st.session_state.test_phase = "complete"
+        st.rerun()
+        return
+
+    if idx >= len(questions):
+        st.session_state.test_phase = "complete"
+        st.rerun()
+        return
+
+    question = questions[idx]
+    st.session_state.test_q_start_time = st.session_state.get("test_q_start_time", time.time())
+
+    selected = render_question(idx + 1, len(questions), question)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Submit Answer", type="primary", key=f"mini_submit_{idx}"):
+            answer = record_answer(question, selected)
+            st.session_state.test_answers.append(answer)
+            st.session_state.test_index += 1
+            st.session_state.test_q_start_time = time.time()
+            st.session_state.test_phase = "question"
+            st.rerun()
+    with col2:
+        if st.button("Skip", key=f"mini_skip_{idx}"):
+            answer = record_answer(question, None)
+            st.session_state.test_answers.append(answer)
+            st.session_state.test_index += 1
+            st.session_state.test_q_start_time = time.time()
+            st.session_state.test_phase = "question"
+            st.rerun()
+
+
+def _mini_complete():
+    answers = st.session_state.test_answers
+    questions = st.session_state.test_questions
+    student = st.session_state.student
+    session = st.session_state.test_session
+    elapsed = time.time() - st.session_state.get("test_drill_start", time.time())
+
+    raw, correct, wrong, skipped = calculate_raw_score(answers, student.level)
+
+    # Save answers to DB
+    db = get_db()
+    for a in answers:
+        db.save_answer(a)
+
+    session.completed_at = datetime.now().isoformat()
+    db.update_session(session)
+
+    # Update mastery
+    try:
+        engine = get_leveling()
+        events = engine.update_after_answers(answers, questions)
+    except Exception:
+        events = []
+
+    st.header("Mini Test Complete!")
+
+    accuracy = correct / len(questions) if questions else 0
+    if accuracy >= 0.85:
+        st.success("Excellent work!")
+    elif accuracy >= 0.60:
+        st.info("Good effort! Keep practicing.")
+    else:
+        st.warning("Keep working at it — you'll improve!")
+
+    cols = st.columns(4)
+    cols[0].metric("Score", f"{correct}/{len(questions)}")
+    cols[1].metric("Accuracy", f"{accuracy:.0%}")
+    cols[2].metric("Time", format_time(int(elapsed)))
+    cols[3].metric("Skipped", skipped)
+
+    for event in events:
+        st.success(event)
+
+    # Topic breakdown
+    breakdown = compute_topic_breakdown(answers, questions)
+    if breakdown:
+        st.subheader("Topic Breakdown")
+        for topic, stats in breakdown.items():
+            display_name = QUESTION_TYPE_DISPLAY.get(topic, topic.title())
+            acc = stats["accuracy"]
+            bar = "=" * int(acc * 20)
+            st.text(f"{display_name:<25} {stats['correct']}/{stats['total']}  ({acc:.0%})  [{bar}]")
+
+    # Review answers
+    with st.expander("Review Answers"):
+        for i, (q, a) in enumerate(zip(questions, answers)):
+            if a.selected_answer is None:
+                icon = "⬜"
+                status = "Skipped"
+            elif a.is_correct:
+                icon = "✅"
+                status = f"Correct ({a.selected_answer})"
+            else:
+                icon = "❌"
+                status = f"Chose {a.selected_answer}, correct: {q.correct_answer}"
+            st.markdown(f"{icon} **Q{i+1}.** {q.stem}  \n{status}")
+            if q.explanation:
+                st.caption(q.explanation)
 
     if st.button("Back to Home", type="primary"):
         reset_test_state()
@@ -1368,6 +1565,7 @@ def main():
         "full_test": page_full_test,
         "section_practice": page_section_practice,
         "quick_drill": page_quick_drill,
+        "mini_test": page_mini_test,
         "review": page_review,
         "writing": page_writing,
         "progress": page_progress,
