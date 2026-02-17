@@ -22,6 +22,7 @@ from scoring import (
 from leveling import LevelingEngine
 from progress import ProgressTracker
 from writing import ELEMENTARY_PROMPTS, MIDDLE_PROMPTS
+from badges import check_new_badges
 
 
 # =====================================================================
@@ -188,6 +189,95 @@ def skip_remaining_questions():
         st.session_state.test_answers.append(answer)
 
 
+def check_and_award_badges(extra_stats: Optional[Dict] = None):
+    """Check for new badges and announce them."""
+    student = st.session_state.student
+    db = get_db()
+
+    # Build stats dict for badge checks
+    stats_raw = db.get_student_stats(student.id)
+    mastery = db.get_topic_mastery(student.id)
+    streak_data = db.get_streak_data(student.id)
+
+    stats = {
+        "total_answers": stats_raw.get("total_answers", 0),
+        "streak": streak_data.get("current_streak", 0),
+        "total_changed_answers": st.session_state.get("lifetime_changed_answers", 0),
+        "topic_accuracy": {},
+    }
+
+    for m in mastery:
+        acc = m.total_correct / m.total_attempted if m.total_attempted > 0 else 0
+        stats["topic_accuracy"][m.topic_tag] = {
+            "total": m.total_attempted,
+            "correct": m.total_correct,
+            "accuracy": acc,
+        }
+
+    if extra_stats:
+        stats.update(extra_stats)
+
+    existing = db.get_badges(student.id)
+    existing_names = [b["badge_name"] for b in existing]
+    new_badges = check_new_badges(stats, existing_names)
+
+    for badge in new_badges:
+        db.save_badge(student.id, badge.name, badge.description, badge.icon)
+        st.balloons()
+        st.success(f"{badge.icon} **New Badge Earned: {badge.name}!** — {badge.description}")
+
+
+NUDGE_MESSAGES = [
+    "Did you double-check your answer?",
+    "Are you sure about this one?",
+    "Take another look before submitting!",
+    "Have you checked all the choices?",
+    "Read the question one more time!",
+]
+
+
+def render_confirm_nudge(return_phase: str):
+    """Show a confirmation nudge before recording the answer."""
+    question = st.session_state.test_pending_question
+    selected = st.session_state.test_pending_selected
+    idx = st.session_state.test_index
+
+    # Pick a nudge message based on question index for variety
+    nudge = NUDGE_MESSAGES[idx % len(NUDGE_MESSAGES)]
+
+    st.info(nudge)
+    st.markdown(f"**{question.stem}**")
+
+    if selected:
+        choice_text = question.choices.get(selected, "")
+        st.markdown(f"Your answer: **{selected}) {choice_text}**")
+    else:
+        st.warning("You haven't selected an answer.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Yes, Submit", type="primary", key=f"confirm_yes_{idx}"):
+            answer = record_answer(question, selected)
+            st.session_state.test_answers.append(answer)
+
+            # Track for drill feedback phase
+            st.session_state.test_last_answer = answer
+            st.session_state.test_last_question = question
+
+            if st.session_state.get("test_instant_feedback"):
+                st.session_state.test_phase = "feedback"
+            else:
+                st.session_state.test_index += 1
+                st.session_state.test_q_start_time = time.time()
+                st.session_state.test_phase = return_phase
+            st.rerun()
+    with col2:
+        if st.button("Go Back", key=f"confirm_back_{idx}"):
+            st.session_state.test_phase = return_phase
+            st.session_state.test_changed_answers = st.session_state.get("test_changed_answers", 0) + 1
+            st.rerun()
+
+
 def render_section_result(result: SectionResult):
     cols = st.columns(4)
     with cols[0]:
@@ -246,7 +336,9 @@ def render_sidebar():
 
         if st.session_state.student:
             s = st.session_state.student
-            st.info(f"**{s.name}** | Grade {s.grade} | {s.level.title()}")
+            streak = get_db().get_streak_data(s.id).get("current_streak", 0)
+            streak_text = f" | 🔥 {streak}-day streak" if streak > 0 else ""
+            st.info(f"**{s.name}** | Grade {s.grade} | {s.level.title()}{streak_text}")
             st.divider()
 
             if st.button("Practice Test (Full)", use_container_width=True, key="nav_full"):
@@ -264,6 +356,9 @@ def render_sidebar():
             if st.button("5-Min Mini Test", use_container_width=True, key="nav_mini"):
                 reset_test_state()
                 st.session_state.page = "mini_test"
+                st.rerun()
+            if st.button("Vocabulary", use_container_width=True, key="nav_vocab"):
+                st.session_state.page = "vocabulary"
                 st.rerun()
             if st.button("Review Missed", use_container_width=True, key="nav_review"):
                 st.session_state.page = "review"
@@ -355,6 +450,20 @@ def page_home():
         st.markdown("**Full Simulation**")
         st.write("Take a **Full Practice Test** to simulate the real SSAT.")
 
+    # Streaks & Badges
+    db = get_db()
+    streak_data = db.get_streak_data(s.id)
+    badges = db.get_badges(s.id)
+
+    st.divider()
+    scol1, scol2, scol3 = st.columns(3)
+    scol1.metric("Current Streak", f"{streak_data['current_streak']} days" if streak_data['current_streak'] > 0 else "Start today!")
+    scol2.metric("Longest Streak", f"{streak_data['longest_streak']} days")
+    scol3.metric("Badges Earned", len(badges))
+
+    if badges:
+        st.markdown("**Your Badges:** " + "  ".join(f"{b['badge_icon']} {b['badge_name']}" for b in badges))
+
 
 # =====================================================================
 # Section 7: Quick Drill
@@ -368,6 +477,8 @@ def page_quick_drill():
         _drill_setup()
     elif phase == "question":
         _drill_question()
+    elif phase == "confirm":
+        render_confirm_nudge("question")
     elif phase == "feedback":
         _drill_feedback()
     elif phase == "complete":
@@ -468,11 +579,9 @@ def _drill_question():
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Submit Answer", type="primary", key=f"submit_{idx}"):
-            answer = record_answer(question, selected)
-            st.session_state.test_answers.append(answer)
-            st.session_state.test_last_answer = answer
-            st.session_state.test_last_question = question
-            st.session_state.test_phase = "feedback"
+            st.session_state.test_pending_question = question
+            st.session_state.test_pending_selected = selected
+            st.session_state.test_phase = "confirm"
             st.rerun()
     with col2:
         if st.button("Skip", key=f"skip_{idx}"):
@@ -527,6 +636,9 @@ def _drill_complete():
     except Exception:
         events = []
 
+    # Check badges
+    check_and_award_badges()
+
     st.header("Quick Drill Complete!")
 
     accuracy = correct / len(questions) if questions else 0
@@ -537,10 +649,15 @@ def _drill_complete():
     else:
         st.warning("Keep working at it — you'll improve!")
 
-    cols = st.columns(3)
+    cols = st.columns(4)
     cols[0].metric("Score", f"{correct}/{len(questions)} ({accuracy:.0%})")
     cols[1].metric("Time", format_time(int(elapsed)))
     cols[2].metric("Skipped", skipped)
+    changed = st.session_state.get("test_changed_answers", 0)
+    cols[3].metric("Answers Changed", changed)
+
+    if changed > 0:
+        st.caption(f"You went back and changed {changed} answer(s) after double-checking!")
 
     for event in events:
         st.success(event)
@@ -562,6 +679,8 @@ def page_mini_test():
         _mini_setup()
     elif phase == "question":
         _mini_question()
+    elif phase == "confirm":
+        render_confirm_nudge("question")
     elif phase == "complete":
         _mini_complete()
 
@@ -650,11 +769,9 @@ def _mini_question():
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Submit Answer", type="primary", key=f"mini_submit_{idx}"):
-            answer = record_answer(question, selected)
-            st.session_state.test_answers.append(answer)
-            st.session_state.test_index += 1
-            st.session_state.test_q_start_time = time.time()
-            st.session_state.test_phase = "question"
+            st.session_state.test_pending_question = question
+            st.session_state.test_pending_selected = selected
+            st.session_state.test_phase = "confirm"
             st.rerun()
     with col2:
         if st.button("Skip", key=f"mini_skip_{idx}"):
@@ -690,6 +807,14 @@ def _mini_complete():
     except Exception:
         events = []
 
+    # Check badges (with mini test specific stats)
+    elapsed = time.time() - st.session_state.get("test_drill_start", time.time())
+    mini_extra = {
+        "mini_test_time_to_spare": max(0, MINI_TEST_SECONDS - elapsed),
+        "mini_test_perfect": correct == len(questions) and len(questions) > 0,
+    }
+    check_and_award_badges(mini_extra)
+
     st.header("Mini Test Complete!")
 
     accuracy = correct / len(questions) if questions else 0
@@ -700,11 +825,16 @@ def _mini_complete():
     else:
         st.warning("Keep working at it — you'll improve!")
 
-    cols = st.columns(4)
+    changed = st.session_state.get("test_changed_answers", 0)
+    cols = st.columns(5)
     cols[0].metric("Score", f"{correct}/{len(questions)}")
     cols[1].metric("Accuracy", f"{accuracy:.0%}")
     cols[2].metric("Time", format_time(int(elapsed)))
     cols[3].metric("Skipped", skipped)
+    cols[4].metric("Answers Changed", changed)
+
+    if changed > 0:
+        st.caption(f"You went back and changed {changed} answer(s) after double-checking!")
 
     for event in events:
         st.success(event)
@@ -754,6 +884,8 @@ def page_full_test():
         _fulltest_section_intro()
     elif phase == "question":
         _fulltest_question()
+    elif phase == "confirm":
+        render_confirm_nudge("question")
     elif phase == "section_complete":
         _fulltest_section_complete()
     elif phase == "test_complete":
@@ -855,10 +987,9 @@ def _fulltest_question():
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Submit Answer", type="primary", key=f"ft_submit_{idx}"):
-            answer = record_answer(question, selected)
-            st.session_state.test_answers.append(answer)
-            st.session_state.test_index += 1
-            st.session_state.test_q_start_time = time.time()
+            st.session_state.test_pending_question = question
+            st.session_state.test_pending_selected = selected
+            st.session_state.test_phase = "confirm"
             st.rerun()
     with col2:
         if st.button("Skip", key=f"ft_skip_{idx}"):
@@ -981,6 +1112,8 @@ def page_section_practice():
         _fulltest_section_intro()
     elif phase == "question":
         _fulltest_question()
+    elif phase == "confirm":
+        render_confirm_nudge("question")
     elif phase == "section_complete":
         _section_practice_complete()
 
@@ -1055,7 +1188,7 @@ def page_review():
 
     st.header("Review Missed Questions")
 
-    tab1, tab2, tab3 = st.tabs(["Recent Mistakes", "By Topic", "Frequently Missed"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Recent Mistakes", "By Topic", "Frequently Missed", "AI Insights"])
 
     with tab1:
         wrong = db.get_wrong_answers_for_student(student.id, limit=20)
@@ -1117,6 +1250,24 @@ def page_review():
                     st.success(f"Correct: {question.correct_answer}) {question.choices.get(question.correct_answer, '')}")
                     if question.explanation:
                         st.caption(question.explanation)
+
+    with tab4:
+        wrong_for_ai = db.get_wrong_answers_for_student(student.id, limit=30)
+        if not wrong_for_ai:
+            st.success("No mistakes to analyze yet!")
+        else:
+            st.write("Let AI analyze your mistake patterns to find hidden weaknesses.")
+            if st.button("Analyze My Mistakes", type="primary", key="ai_analyze"):
+                from agents import analyze_mistake_patterns
+                with st.spinner("Analyzing your mistakes..."):
+                    try:
+                        analysis = analyze_mistake_patterns(wrong_for_ai, student)
+                        st.session_state.mistake_analysis = analysis
+                    except Exception as e:
+                        st.error(f"Analysis failed: {e}")
+
+            if "mistake_analysis" in st.session_state:
+                st.markdown(st.session_state.mistake_analysis)
 
 
 # =====================================================================
@@ -1452,6 +1603,139 @@ def page_progress():
         else:
             st.success("Keep practicing! Recommendations will appear as more data is collected.")
 
+        st.divider()
+        st.subheader("Parent Report")
+        st.write("Generate an AI-written summary to share with parents.")
+        if st.button("Generate Parent Report", type="primary", key="parent_report"):
+            from agents import generate_parent_report
+            with st.spinner("Writing report..."):
+                try:
+                    session_count = stats.get("full_tests", 0) + stats.get("section_practices", 0) + stats.get("drills", 0)
+                    report = generate_parent_report(student, stats, mastery, streak, session_count)
+                    st.session_state.parent_report = report
+                except Exception as e:
+                    st.error(f"Report generation failed: {e}")
+
+        if "parent_report" in st.session_state:
+            st.markdown("---")
+            st.markdown(st.session_state.parent_report)
+            st.caption("Copy the text above to share with parents.")
+
+
+# =====================================================================
+# Section 12b: Vocabulary Builder
+# =====================================================================
+
+def page_vocabulary():
+    student = st.session_state.student
+    db = get_db()
+
+    st.header("Vocabulary Builder")
+
+    vocab = db.get_vocabulary(student.id)
+    tab1, tab2 = st.tabs(["Word Cards", "Quiz Me"])
+
+    with tab1:
+        # Button to build vocab from missed questions
+        if st.button("Build from Missed Questions", type="primary", key="build_vocab"):
+            wrong = db.get_wrong_answers_for_student(student.id, limit=50)
+            verbal_wrong = [(a, q) for a, q in wrong if q.question_type in ("synonym", "analogy")]
+            if not verbal_wrong:
+                st.info("No missed verbal questions to learn from yet!")
+            else:
+                from agents import build_vocabulary_list
+                with st.spinner("Building vocabulary list..."):
+                    try:
+                        words = build_vocabulary_list(verbal_wrong, student.grade)
+                        added = 0
+                        for w in words:
+                            db.save_vocabulary_word(
+                                student.id, w["word"], w.get("definition", ""),
+                                w.get("example", ""), w.get("tip", ""),
+                            )
+                            added += 1
+                        st.success(f"Added {added} words to your vocabulary!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to build vocabulary: {e}")
+
+        # Show existing vocab
+        vocab = db.get_vocabulary(student.id)
+        if not vocab:
+            st.info("No vocabulary words yet. Click above to build from your missed questions!")
+        else:
+            st.write(f"**{len(vocab)} words** in your vocabulary list:")
+            for w in vocab:
+                mastered = w["times_correct"] >= 3
+                icon = "✅" if mastered else "📖"
+                with st.expander(f"{icon} {w['word']}"):
+                    st.markdown(f"**Definition:** {w['definition']}")
+                    if w.get("example_sentence"):
+                        st.markdown(f"**Example:** {w['example_sentence']}")
+                    if w.get("memory_tip"):
+                        st.caption(f"Tip: {w['memory_tip']}")
+                    reviewed = w.get("times_reviewed", 0)
+                    correct = w.get("times_correct", 0)
+                    if reviewed > 0:
+                        st.caption(f"Reviewed {reviewed}x | Correct {correct}x")
+
+    with tab2:
+        vocab = db.get_vocabulary(student.id)
+        if len(vocab) < 4:
+            st.info("Need at least 4 words to start a quiz. Add more words first!")
+        else:
+            if "vocab_quiz" not in st.session_state:
+                st.write("Test yourself on your vocabulary words!")
+                if st.button("Start Quiz", type="primary", key="start_vocab_quiz"):
+                    import random
+                    quiz_words = list(vocab)
+                    random.shuffle(quiz_words)
+                    st.session_state.vocab_quiz = quiz_words[:min(10, len(quiz_words))]
+                    st.session_state.vocab_quiz_idx = 0
+                    st.session_state.vocab_quiz_score = 0
+                    st.rerun()
+            else:
+                quiz = st.session_state.vocab_quiz
+                idx = st.session_state.vocab_quiz_idx
+
+                if idx >= len(quiz):
+                    # Quiz complete
+                    score = st.session_state.vocab_quiz_score
+                    total = len(quiz)
+                    st.success(f"Quiz Complete! Score: {score}/{total} ({score/total:.0%})")
+                    if st.button("Done", type="primary"):
+                        del st.session_state.vocab_quiz
+                        del st.session_state.vocab_quiz_idx
+                        del st.session_state.vocab_quiz_score
+                        st.rerun()
+                else:
+                    word = quiz[idx]
+                    st.subheader(f"Word {idx + 1} of {len(quiz)}")
+                    st.markdown(f"### What does **{word['word']}** mean?")
+
+                    # Build choices: correct definition + 3 random wrong ones
+                    import random
+                    other_defs = [v["definition"] for v in vocab if v["id"] != word["id"] and v["definition"]]
+                    random.shuffle(other_defs)
+                    wrong_defs = other_defs[:3]
+
+                    all_choices = [word["definition"]] + wrong_defs
+                    random.shuffle(all_choices)
+
+                    choice = st.radio("Pick the definition:", all_choices, index=None, key=f"vq_{idx}")
+
+                    if st.button("Check", type="primary", key=f"vq_check_{idx}"):
+                        correct = choice == word["definition"]
+                        db.update_vocabulary_review(word["id"], correct)
+                        if correct:
+                            st.session_state.vocab_quiz_score += 1
+                            st.success("Correct!")
+                        else:
+                            st.error(f"Not quite. The answer is: {word['definition']}")
+                        st.session_state.vocab_quiz_idx += 1
+                        time.sleep(1)
+                        st.rerun()
+
 
 # =====================================================================
 # Section 13: Settings
@@ -1566,6 +1850,7 @@ def main():
         "section_practice": page_section_practice,
         "quick_drill": page_quick_drill,
         "mini_test": page_mini_test,
+        "vocabulary": page_vocabulary,
         "review": page_review,
         "writing": page_writing,
         "progress": page_progress,

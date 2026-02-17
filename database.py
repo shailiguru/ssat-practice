@@ -85,6 +85,26 @@ SCHEMA_STATEMENTS = [
         feedback TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""",
+    """CREATE TABLE IF NOT EXISTS badges (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER NOT NULL REFERENCES students(id),
+        badge_name TEXT NOT NULL,
+        badge_description TEXT DEFAULT '',
+        badge_icon TEXT DEFAULT '',
+        earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS vocabulary (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER NOT NULL REFERENCES students(id),
+        word TEXT NOT NULL,
+        definition TEXT DEFAULT '',
+        example_sentence TEXT DEFAULT '',
+        memory_tip TEXT DEFAULT '',
+        times_reviewed INTEGER DEFAULT 0,
+        times_correct INTEGER DEFAULT 0,
+        last_reviewed TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 
@@ -785,6 +805,77 @@ class Database:
         }
 
     # ------------------------------------------------------------------
+    # Badges
+    # ------------------------------------------------------------------
+    def get_badges(self, student_id: int) -> List[Dict]:
+        cur = self._cursor()
+        cur.execute(
+            "SELECT badge_name, badge_description, badge_icon, earned_at FROM badges WHERE student_id = %s ORDER BY earned_at",
+            (student_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [dict(r) for r in rows]
+
+    def save_badge(self, student_id: int, name: str, description: str, icon: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO badges (student_id, badge_name, badge_description, badge_icon) VALUES (%s, %s, %s, %s)",
+            (student_id, name, description, icon),
+        )
+        self.conn.commit()
+        cur.close()
+
+    # ------------------------------------------------------------------
+    # Vocabulary
+    # ------------------------------------------------------------------
+    def get_vocabulary(self, student_id: int) -> List[Dict]:
+        cur = self._cursor()
+        cur.execute(
+            "SELECT * FROM vocabulary WHERE student_id = %s ORDER BY created_at DESC",
+            (student_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [dict(r) for r in rows]
+
+    def save_vocabulary_word(self, student_id: int, word: str, definition: str,
+                             example: str, tip: str) -> None:
+        cur = self.conn.cursor()
+        # Check if word already exists for student
+        cur.execute(
+            "SELECT id FROM vocabulary WHERE student_id = %s AND LOWER(word) = LOWER(%s)",
+            (student_id, word),
+        )
+        if cur.fetchone():
+            cur.close()
+            return
+        cur.execute(
+            "INSERT INTO vocabulary (student_id, word, definition, example_sentence, memory_tip) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (student_id, word, definition, example, tip),
+        )
+        self.conn.commit()
+        cur.close()
+
+    def update_vocabulary_review(self, vocab_id: int, correct: bool) -> None:
+        cur = self.conn.cursor()
+        if correct:
+            cur.execute(
+                "UPDATE vocabulary SET times_reviewed = times_reviewed + 1, "
+                "times_correct = times_correct + 1, last_reviewed = CURRENT_TIMESTAMP WHERE id = %s",
+                (vocab_id,),
+            )
+        else:
+            cur.execute(
+                "UPDATE vocabulary SET times_reviewed = times_reviewed + 1, "
+                "last_reviewed = CURRENT_TIMESTAMP WHERE id = %s",
+                (vocab_id,),
+            )
+        self.conn.commit()
+        cur.close()
+
+    # ------------------------------------------------------------------
     # Reset helper (used by settings page)
     # ------------------------------------------------------------------
     def reset_student_progress(self, student_id: int) -> None:
@@ -794,5 +885,7 @@ class Database:
         cur.execute("DELETE FROM test_sessions WHERE student_id = %s", (student_id,))
         cur.execute("DELETE FROM topic_mastery WHERE student_id = %s", (student_id,))
         cur.execute("DELETE FROM writing_samples WHERE student_id = %s", (student_id,))
+        cur.execute("DELETE FROM badges WHERE student_id = %s", (student_id,))
+        cur.execute("DELETE FROM vocabulary WHERE student_id = %s", (student_id,))
         self.conn.commit()
         cur.close()
